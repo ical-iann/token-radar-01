@@ -245,7 +245,7 @@
         el('div', { class: 'fact' }, el('span', { text: 'Pre-token rows scored' }), el('b', { text: String(DATA.board_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Early rows below the floor' }), el('b', { text: String(DATA.early_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Median implied value' }), el('b', { text: fmtUsd(medianImplied()) })),
-        el('div', { class: 'fact' }, el('span', { text: 'Top category multiple' }), el('b', { text: topMult ? fmtMult(topMult.multiple) : 'n/a' })),
+        el('div', { class: 'fact' }, el('span', { text: topMult ? 'Top category multiple · ' + topMult.category : 'Top category multiple' }), el('b', { text: topMult ? fmtMult(topMult.multiple) : 'n/a' })),
         el('div', { class: 'fact' }, el('span', { text: 'Live-token protocols set aside' }), el('b', { text: String(DATA.live_size) }))
       )
     );
@@ -254,7 +254,7 @@
   function controls() {
     var categories = Array.from(new Set(DATA.rows.map(function (r) { return r.category || 'Other'; }))).sort();
     var chains = Array.from(new Set(DATA.rows.reduce(function (acc, r) { return acc.concat(r.chains || []); }, []))).sort();
-    var search = el('input', { type: 'search', id: 'q', placeholder: 'Search name, category or chain', value: state.q, 'aria-label': 'Search the board' });
+    var search = el('input', { type: 'search', id: 'q', placeholder: 'Name, category or chain', value: state.q, 'aria-label': 'Search the board' });
     search.addEventListener('input', function () { state.q = search.value; writeHash(); render(); });
     var catSelect = el('select', { id: 'category', 'aria-label': 'Filter by category' },
       el('option', { value: 'all', text: 'All categories' }),
@@ -386,7 +386,8 @@
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x categoryMultiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + 0.02 x min(chains - 1, 5)) )'
       ),
-      el('p', { class: 'sub', text: 'The category multiple is the category\u2019s median market-cap / TVL among the snapshot\u2019s own live-token protocols, but only when the category has at least ' + m.min_live_count + ' of them; with fewer it uses the global median of ' + DATA.global_multiple + ', and the table marks those rows \u201cglobal\u201d. Each live protocol\u2019s own ratio is capped at ' + m.ratio_cap.toFixed(2) + ' first: a token never counts as trading at more than the TVL it secures. The cap alone was not enough: one protocol\u2019s capped ratio still set its category\u2019s median to 1.00, and the shrink toward the global median (4 pseudo-counts, clamped to [0.05, 1.00]) only diluted it to x0.37 \u2014 77% above the global median \u2014 behind ranks 1, 2, 3, 7, 9, 11 and 14, on a single live token each (API3 at 2.97x for Risk Curators, Rain at 400x for Prediction Market, Astar dApps Staking at 3.03x for Chain). A category with one or two live tokens has no measurable multiple of its own, so it takes the global median; a category with none does the same. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
+      el('p', { class: 'sub', text: 'The category multiple is the category\u2019s median market-cap / TVL among the snapshot\u2019s own live-token protocols, but only when the category has at least ' + m.min_live_count + ' of them; with fewer it uses the global median of ' + DATA.global_multiple + ', and the table marks those rows \u201cglobal\u201d. Each live protocol\u2019s own ratio is capped at ' + m.ratio_cap.toFixed(2) + ' first: a token never counts as trading at more than the TVL it secures. The median is shrunk toward the global median (4 pseudo-counts, clamped to [0.05, 1.00]). Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
+      el('p', { class: 'sub', text: 'The cap alone was not enough: one protocol\u2019s capped ratio still set its category\u2019s median to 1.00, and the shrink toward the global median (4 pseudo-counts, clamped to [0.05, 1.00]) only diluted it to x0.37 \u2014 77% above the global median \u2014 behind ranks 1, 2, 3, 7, 9, 11 and 14, on a single live token each (API3 at 2.97x for Risk Curators, Rain at 400x for Prediction Market, Astar dApps Staking at 3.03x for Chain). A category with one or two live tokens has no measurable multiple of its own, so it takes the global median; a category with none does the same.' }),
       el('h3', { text: 'Category multiples from this snapshot (all ' + all.length + ')' }),
       el('div', { class: 'table-wrap' },
         el('table', { class: 'mult-table' },
@@ -408,7 +409,8 @@
   function foot() {
     return el('footer', { class: 'foot' },
       el('p', { text: 'Snapshot ' + DATA.as_of + ', ' + DATA.source + '. Implied values are this radar’s own claim from the snapshot figures; they are not prices and not a prediction that any token is issued. Farm plans are a starting point: check the protocol’s own page before moving funds, and never pay anyone to claim an airdrop.' }),
-      el('p', { text: 'Built by Token Radar, model ' + DATA.model_version + '. ' + DATA.board_size + ' pre-token protocols scored, ' + DATA.watchlist_size + ' on the watchlist, ' + DATA.live_size + ' live-token protocols set aside.' })
+      el('p', { text: 'Built by Token Radar, model ' + DATA.model_version + '. ' + DATA.board_size + ' pre-token protocols scored, ' + DATA.watchlist_size + ' on the watchlist, ' + DATA.live_size + ' live-token protocols set aside.' }),
+      el('p', null, 'How to read this radar: ', el('a', { href: 'README.md', text: 'the dashboard notes' }), ' — the ranking, the multiples and the coverage, in one page.')
     );
   }
 
@@ -423,6 +425,9 @@
     dialog.textContent = '';
     var steps = farmSteps(row);
     var recomputed = impliedOf(row, DATA.model);
+    var multRow = null;
+    DATA.category_multiples.forEach(function (c) { if (c.category === (row.category || 'Other')) multRow = c; });
+    var multLabel = 'Category multiple (' + (row.category || 'Other') + ')' + (multRow && multRow.uses_global ? ' · global median' : '');
     dialog.appendChild(el('div', { class: 'detail-head' },
       el('div', null,
         el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + (WATCH[row.slug] ? ' · watchlist' : ' · early') }),
@@ -435,7 +440,7 @@
       el('h3', { text: 'Implied value' }),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'TVL' }), el('b', { class: 'num', text: fmtUsd(row.tvl_usd) })),
-        el('div', null, el('span', { text: 'Category multiple (' + (row.category || 'Other') + ')' }), el('b', { class: 'num', text: fmtMult(row.category_multiple) })),
+        el('div', null, el('span', { text: multLabel }), el('b', { class: 'num', text: fmtMult(row.category_multiple) })),
         el('div', null, el('span', { text: 'Seven-day growth' }), el('b', { class: 'num', text: fmtPct(row.change_7d) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
