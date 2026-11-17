@@ -1,4 +1,4 @@
-// Token Radar's dashboard, model radar-3. It reads window.RADAR (written beside dashboard/
+// Token Radar's dashboard, model radar-4. It reads window.RADAR (written beside dashboard/
 // by main.ts) and renders the ranked board, filters, a per-protocol detail drawer with the
 // model's own inputs and the protocol's farm plan. No network: every byte it shows is in
 // data.js. The page recomputes each row from the snapshot figures and checks the number
@@ -85,8 +85,8 @@
     var c = (p.category || '').toLowerCase();
     var name = p.name;
     if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'Supply $' + capital + ' of USDC to ' + name + ' on ' + chain + ' and keep the position open.';
-    if (c.indexOf('dex') >= 0) return 'Provide $' + capital + ' of liquidity to ' + name + "'s main pool on " + chain + ' and keep the position open.';
-    if (c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return 'Deposit $' + capital + " of USDC into " + name + "'s highest-yield vault on " + chain + ' and keep the shares.';
+    if (c.indexOf('dex') >= 0 || c.indexOf('liquidity manager') >= 0) return 'Provide $' + capital + ' of liquidity to ' + name + "'s main pool on " + chain + ' and keep the position open.';
+    if (c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0 || c === 'farm') return 'Deposit $' + capital + " of USDC into " + name + "'s highest-yield vault on " + chain + ' and keep the shares.';
     if (c.indexOf('bridge') >= 0) return 'Bridge $' + capital + ' of USDC to ' + chain + ' through ' + name + ' and use the bridged funds in its app.';
     if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return "Stake $" + capital + " of the chain's staking asset through " + name + ' and keep the receipt.';
     if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'Deposit $' + capital + ' of USDC as margin on ' + name + ' and open one small hedge.';
@@ -95,14 +95,17 @@
     if (c.indexOf('stable') >= 0) return 'Mint or deposit $' + capital + ' of the stable asset through ' + name + ' on ' + chain + '.';
     if (c.indexOf('rwa') >= 0) return "Mint $" + capital + " of the protocol's yield asset on " + chain + ' and hold it.';
     if (c.indexOf('insurance') >= 0) return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy.';
+    if (c.indexOf('basis') >= 0) return 'Deposit $' + capital + " of USDC into " + name + "'s basis vault on " + chain + ' and keep the delta-neutral position open.';
+    if (c === 'chain') return 'Bridge $' + capital + ' of USDC onto ' + chain + ' through its official bridge and use it in an app on the chain.';
+    if (c.indexOf('btc') >= 0) return 'Mint $' + capital + ' of the BTC-pegged asset through ' + name + ' on ' + chain + ' and hold it.';
     return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and keep the position open.';
   }
   function secondActionFor(p, capital, chain) {
     var c = (p.category || '').toLowerCase();
     var name = p.name;
     if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'Borrow $' + Math.round(capital / 2) + ' against the supplied collateral on ' + name + ' and repay it a week later.';
-    if (c.indexOf('dex') >= 0) return 'Swap $' + Math.round(capital / 2) + ' through ' + name + ' on ' + chain + ' in two trades a week apart.';
-    if (c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return "Harvest the vault's rewards on " + name + ' once a week and restake them into the same vault.';
+    if (c.indexOf('dex') >= 0 || c.indexOf('liquidity manager') >= 0) return 'Swap $' + Math.round(capital / 2) + ' through ' + name + ' on ' + chain + ' in two trades a week apart.';
+    if (c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0 || c === 'farm') return "Harvest the vault's rewards on " + name + ' once a week and restake them into the same vault.';
     if (c.indexOf('bridge') >= 0) return 'Send a second, smaller bridge of $' + Math.round(capital / 4) + ' back through ' + name + ' the following week.';
     if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return 'Delegate a second stake of $' + Math.round(capital / 2) + ' to a different validator through ' + name + '.';
     if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'Close the hedge on ' + name + ' and open a fresh one the next week so both sides of the book are touched.';
@@ -111,6 +114,9 @@
     if (c.indexOf('stable') >= 0) return 'Swap $' + Math.round(capital / 2) + ' of the stable asset for another asset on ' + chain + ' and swap it back.';
     if (c.indexOf('rwa') >= 0) return 'Claim the yield the ' + name + ' position earned and reinvest it in the same asset.';
     if (c.indexOf('insurance') >= 0) return 'Renew the ' + name + ' cover once and file one test claim so the policy is active.';
+    if (c.indexOf('basis') >= 0) return "Claim the funding yield the " + name + " position earned once a week and restake it into the same vault.";
+    if (c === 'chain') return 'Use a second app on ' + chain + ': deposit $' + Math.round(capital / 2) + ' into another protocol that runs on the chain.';
+    if (c.indexOf('btc') >= 0) return 'Swap $' + Math.round(capital / 2) + ' of the BTC-pegged asset for another asset on ' + chain + ' and swap it back.';
     return 'Use ' + name + ' a second way on ' + chain + ': a swap, a vote or a deposit of $' + Math.round(capital / 2) + '.';
   }
   function stepText(step) {
@@ -123,8 +129,8 @@
     var c = (p.category || '').toLowerCase();
     var name = p.name;
     if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return { text: "Watch the borrow's health factor on " + name + ': if the collateral falls, repay part of the loan or add collateral before the position is liquidated.', cost: 'nothing to check; a liquidation would cost part of the collateral', time: '5 minutes a week' };
-    if (c.indexOf('dex') >= 0) return { text: 'Watch for impermanent loss on ' + name + ': if the pool\'s price moves a long way, the LP shares can be worth less than holding the tokens, so check the position before adding more.', cost: 'nothing to check; the loss is the price move itself', time: '5 minutes a week' };
-    if (c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return { text: "Vault yields and leverage change on " + name + ": check the vault's strategy and leverage before adding more, and pull out if the leverage has risen past what you set.", cost: 'nothing to check; a leveraged vault can lose more than it gains', time: '5 minutes a week' };
+    if (c.indexOf('dex') >= 0 || c.indexOf('liquidity manager') >= 0) return { text: 'Watch for impermanent loss on ' + name + ': if the pool\'s price moves a long way, the LP shares can be worth less than holding the tokens, so check the position before adding more.', cost: 'nothing to check; the loss is the price move itself', time: '5 minutes a week' };
+    if (c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0 || c === 'farm') return { text: "Vault yields and leverage change on " + name + ": check the vault's strategy and leverage before adding more, and pull out if the leverage has risen past what you set.", cost: 'nothing to check; a leveraged vault can lose more than it gains', time: '5 minutes a week' };
     if (c.indexOf('bridge') >= 0) return { text: 'Bridged funds depend on ' + name + '\'s contracts: use only the bridge page the protocol itself publishes, and keep the receipt for each crossing until the funds arrive on ' + chain + '.', cost: 'nothing to check; a failed crossing strands the funds', time: '5 minutes a crossing' };
     if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return { text: 'Staked assets can be slashed or locked on ' + name + ': check the unbonding wait and the slashing terms before staking more, so you know how long an exit takes.', cost: 'nothing to check; the lock is the unbonding wait', time: '5 minutes' };
     if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return { text: 'Leverage cuts both ways on ' + name + ': keep the margin small, and close the hedge if funding turns against it rather than adding margin to hold it.', cost: 'nothing to check; a losing hedge costs the margin', time: '5 minutes a week' };
@@ -133,6 +139,9 @@
     if (c.indexOf('stable') >= 0) return { text: 'A stable asset can depeg on ' + name + ': check the peg and the backing before minting more, and do not hold the stable asset through a depeg.', cost: 'nothing to check; a depeg is the loss', time: '5 minutes a week' };
     if (c.indexOf('rwa') >= 0) return { text: "A yield asset depends on its issuer on " + name + ": check the issuer's backing and redemption terms before minting more, and know how long a redemption takes.", cost: 'nothing to check; the issuer is the risk', time: '5 minutes' };
     if (c.indexOf('insurance') >= 0) return { text: 'Cover pays only on its terms on ' + name + ': read what the policy excludes before renewing, so you do not pay for cover that would not pay out.', cost: 'nothing to check; an exclusion voids the claim', time: '10 minutes' };
+    if (c.indexOf('basis') >= 0) return { text: 'Basis trades earn the funding rate on ' + name + ': if funding flips negative the position pays instead of earning, so check the rate before adding more and leave if it stays negative.', cost: 'nothing to check; a negative funding rate is the loss', time: '5 minutes a week' };
+    if (c === 'chain') return { text: "A new chain's bridge and sequencer can pause on " + name + ': keep only the funds you plan to farm on ' + chain + ', and check the withdrawal wait before bridging more.', cost: 'nothing to check; a paused bridge strands the funds', time: '5 minutes a week' };
+    if (c.indexOf('btc') >= 0) return { text: 'A BTC-pegged asset can depeg on ' + name + ': check the peg and the backing before minting more, and do not hold the asset through a depeg.', cost: 'nothing to check; a depeg is the loss', time: '5 minutes a week' };
     return { text: 'The position depends on ' + name + '\'s contracts on ' + chain + ': check its audits and whether it can pause withdrawals before adding more than the $' + capital + ' you planned.', cost: 'nothing to check; a paused contract strands the funds', time: '10 minutes' };
   }
   function farmSteps(p) {
@@ -377,7 +386,7 @@
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x categoryMultiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + 0.02 x min(chains - 1, 5)) )'
       ),
-      el('p', { class: 'sub', text: 'The category multiple is the category\u2019s median market-cap / TVL among the snapshot\u2019s own live-token protocols, shrunk toward the global median of ' + DATA.global_multiple + ' with 4 pseudo-counts and clamped to [0.05, 1.00]. Each live protocol\u2019s own ratio is capped at ' + m.ratio_cap.toFixed(2) + ' first: a token never counts as trading at more than the TVL it secures, so a token trading on a sliver of TVL cannot set a whole category\u2019s multiple. Without that cap one protocol did \u2014 a prediction-market token worth $2.6B on $6.6M of TVL, a 400x ratio, set its category to the 1.00 clamp. A category with one live token cannot set its own multiple; a category with none uses the global median. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
+      el('p', { class: 'sub', text: 'The category multiple is the category\u2019s median market-cap / TVL among the snapshot\u2019s own live-token protocols, but only when the category has at least ' + m.min_live_count + ' of them; with fewer it uses the global median of ' + DATA.global_multiple + ', and the table marks those rows \u201cglobal\u201d. Each live protocol\u2019s own ratio is capped at ' + m.ratio_cap.toFixed(2) + ' first: a token never counts as trading at more than the TVL it secures. The cap alone was not enough: one protocol\u2019s capped ratio still set its category\u2019s median to 1.00, and the shrink toward the global median (4 pseudo-counts, clamped to [0.05, 1.00]) only diluted it to x0.37 \u2014 77% above the global median \u2014 behind ranks 1, 2, 3, 7, 9, 11 and 14, on a single live token each (API3 at 2.97x for Risk Curators, Rain at 400x for Prediction Market, Astar dApps Staking at 3.03x for Chain). A category with one or two live tokens has no measurable multiple of its own, so it takes the global median; a category with none does the same. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
       el('h3', { text: 'Category multiples from this snapshot (all ' + all.length + ')' }),
       el('div', { class: 'table-wrap' },
         el('table', { class: 'mult-table' },
@@ -387,7 +396,7 @@
               el('td', { text: c.category }),
               el('td', { class: 'num', text: String(c.live_count) }),
               el('td', { class: 'num', text: c.raw_median === null ? 'n/a' : 'x' + c.raw_median.toFixed(3) }),
-              el('td', { class: 'num', text: fmtMult(c.multiple) })
+              el('td', { class: 'num', text: fmtMult(c.multiple) + (c.uses_global ? ' · global' : '') })
             );
           }))
         )

@@ -1,4 +1,4 @@
-// Token Radar's model, version radar-3: one snapshot of the protocol universe in, one ranked
+// Token Radar's model, version radar-4: one snapshot of the protocol universe in, one ranked
 // board out.
 //
 // The board covers EVERY rankable pre-token protocol in the snapshot: the whole 40-protocol
@@ -11,29 +11,36 @@
 // special-cased; the same function scores every row:
 //
 //   categoryMultiple = the category's median market-cap / TVL among the snapshot's own
-//                      live-token protocols, shrunk toward the global median (4 pseudo-counts)
-//                      and clamped to [0.05, 1.0]. Before the median is taken, each live
-//                      protocol's own market-cap / TVL ratio is capped at 1.0: a token never
-//                      counts as trading at more than the TVL it secures, so a token trading
-//                      on a sliver of TVL cannot set a whole category's multiple. Without the
-//                      cap, one protocol did: Rain, a prediction-market token with a $2.6B
-//                      market cap on $6.6M of TVL (a 400x ratio), set the Prediction Market
-//                      multiple to the 1.0 clamp and put Polymarket at $318M; and API3, the
-//                      single live Risk Curator at 2.97x, set the multiple behind ranks 1, 2
-//                      and 3. With the cap no multiple sits on the clamp, and the top three
-//                      keep their order on roughly half the value. A category whose tokens
-//                      trade richly against TVL (DEXs, bridges) earns a higher multiple than
-//                      one whose tokens trade thinly (liquid staking, lending); a category
-//                      with one or two live tokens is pulled toward the global median so a
-//                      single outlier cannot set the multiple. Categories with no live-token
-//                      protocol use the global median. The multiples are computed from this
-//                      snapshot at run time, never written down per category.
+//                      live-token protocols, but only when the category has at least
+//                      MIN_LIVE_COUNT (3) of them; with fewer, the category uses the
+//                      global median. Each live protocol's ratio is capped at 1.0 first,
+//                      then the median is shrunk toward the global median (4 pseudo-counts)
+//                      and clamped to [0.05, 1.00]
 //   base       = tvl_usd x categoryMultiple
 //   growth     = clamp(change_7d, -60, 120) per cent
 //   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
 //   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
 //   breadth    = 1 + 0.02 x min(chains - 1, 5)            (more chains, more reach, at most 1.10)
 //   implied    = max(1, round(base x growthMult x maturity x breadth))
+//
+// The minimum-sample rule is new in radar-4, and it finishes what radar-3's ratio cap
+// started. The cap stopped one protocol setting a category to the 1.00 clamp, but it did
+// not stop one protocol setting the category at all: a single live token's ratio, capped
+// to 1.00, still set the category median to 1.00, and the 4-count shrink only diluted it
+// to 0.37 — 77% above the global median of 0.21. Seven of the top fifteen rows carried
+// that multiple: Risk Curators on API3 alone (2.97x on $11.8M of TVL, capped to 1.00),
+// Prediction Market on Rain alone ($2.6B on $6.6M of TVL, 400x), Chain on Astar dApps
+// Staking alone (3.03x), and Derivatives on two thin-TVL perps (Gains 1.38x on $6.0M,
+// Veranta 2.95x on $10.8M) at 0.48. A category with one or two live tokens has no
+// measurable multiple of its own — one token, however richly it trades, cannot set it —
+// so those categories now use the global median, the honest prior. The top three keep
+// their order on the global multiple (Steakhouse $511M, Sentora $473M, Gauntlet $305M),
+// Polymarket falls from #6 at $118M to #9 at $68M, and the correction lands exactly on
+// the rows the thin-TVL tokens had inflated. The rule cuts both ways: categories whose
+// one or two live tokens trade thinly (Onchain Capital Allocator, Restaking, Staking
+// Pool) also move to the global median, so Veda rises from $201M to $293M. Categories
+// with three or more live tokens keep their own shrunk median (DEXs x0.31, Lending
+// x0.15, Liquid Staking x0.09, Privacy x0.54).
 //
 // The dashboard recomputes a row from the same figures and checks the number board.json
 // carries, so the page's code and the board's data are visibly the same arithmetic.
@@ -71,6 +78,7 @@ export interface ModelConstants {
   maturity_days: number;
   unknown_age_days: number;
   shrink_count: number;
+  min_live_count: number;
   multiple_floor: number;
   multiple_cap: number;
   ratio_cap: number;
@@ -87,6 +95,7 @@ export const MODEL: ModelConstants = {
   maturity_days: 1095,
   unknown_age_days: 365,
   shrink_count: 4,
+  min_live_count: 3,
   multiple_floor: 0.05,
   multiple_cap: 1.0,
   ratio_cap: 1.0,
@@ -95,7 +104,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -170,6 +179,7 @@ export interface CategoryMultiple {
   live_count: number;
   raw_median: number | null;
   multiple: number;
+  uses_global: boolean;
 }
 
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
@@ -223,11 +233,13 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
 
 /**
  * The category multiples, computed from the snapshot's own live-token protocols: for each
- * category, the median of market-cap / TVL over its protocols that record a token and a market
- * cap, with each protocol's ratio capped at `ratio_cap` first (a token never counts as trading
- * at more than the TVL it secures, so a token on a sliver of TVL cannot set a whole category's
- * multiple), then shrunk toward the global median by `shrink_count` pseudo-counts and clamped.
- * Categories with no live-token protocol fall back to the global median.
+ * category with at least `min_live_count` live-token protocols, the median of market-cap /
+ * TVL over those protocols, with each protocol's ratio capped at `ratio_cap` first (a token
+ * never counts as trading at more than the TVL it secures), then shrunk toward the global
+ * median by `shrink_count` pseudo-counts and clamped. A category with fewer live-token
+ * protocols has no measurable multiple of its own — one token, however richly it trades,
+ * cannot set a category's multiple — so it uses the global median, and `uses_global` says
+ * so. Categories with no live-token protocol likewise use the global median.
  */
 export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { global: number; byCategory: Map<string, number>; table: CategoryMultiple[] } {
   const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
@@ -244,10 +256,12 @@ export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MO
   const table: CategoryMultiple[] = [];
   for (const [cat, ratios] of [...byCat.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
     const raw = median(ratios);
-    const shrunk = (ratios.length * raw + model.shrink_count * global) / (ratios.length + model.shrink_count);
-    const multiple = Math.min(model.multiple_cap, Math.max(model.multiple_floor, shrunk));
+    const usesGlobal = ratios.length < model.min_live_count;
+    const multiple = usesGlobal
+      ? global
+      : Math.min(model.multiple_cap, Math.max(model.multiple_floor, (ratios.length * raw + model.shrink_count * global) / (ratios.length + model.shrink_count)));
     byCategory.set(cat, multiple);
-    table.push({ category: cat, live_count: ratios.length, raw_median: Math.round(raw * 10000) / 10000, multiple: Math.round(multiple * 10000) / 10000 });
+    table.push({ category: cat, live_count: ratios.length, raw_median: Math.round(raw * 10000) / 10000, multiple: Math.round(multiple * 10000) / 10000, uses_global: usesGlobal });
   }
   return { global: Math.round(global * 10000) / 10000, byCategory, table };
 }
@@ -393,8 +407,8 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
   const c = (p.category ?? '').toLowerCase();
   const name = p.name;
   if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
-  if (c.includes('dex')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (c.includes('yield') || c.includes('leveraged farm')) return `Deposit $${capital} of USDC into ${name}'s highest-yield vault on ${chain} and keep the shares.`;
+  if (c.includes('dex') || c.includes('liquidity manager')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
+  if (c.includes('yield') || c.includes('leveraged farm') || c === 'farm') return `Deposit $${capital} of USDC into ${name}'s highest-yield vault on ${chain} and keep the shares.`;
   if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
   if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
   if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
@@ -403,6 +417,9 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
   if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
   if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
   if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
+  if (c.includes('basis')) return `Deposit $${capital} of USDC into ${name}'s basis vault on ${chain} and keep the delta-neutral position open.`;
+  if (c === 'chain') return `Bridge $${capital} of USDC onto ${chain} through its official bridge and use it in an app on the chain.`;
+  if (c.includes('btc')) return `Mint $${capital} of the BTC-pegged asset through ${name} on ${chain} and hold it.`;
   return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
 }
 
@@ -412,8 +429,8 @@ function secondActionFor(p: SnapshotProtocol, capital: number, chain: string): s
   const c = (p.category ?? '').toLowerCase();
   const name = p.name;
   if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Borrow $${Math.round(capital / 2)} against the supplied collateral on ${name} and repay it a week later.`;
-  if (c.includes('dex')) return `Swap $${Math.round(capital / 2)} through ${name} on ${chain} in two trades a week apart.`;
-  if (c.includes('yield') || c.includes('leveraged farm')) return `Harvest the vault's rewards on ${name} once a week and restake them into the same vault.`;
+  if (c.includes('dex') || c.includes('liquidity manager')) return `Swap $${Math.round(capital / 2)} through ${name} on ${chain} in two trades a week apart.`;
+  if (c.includes('yield') || c.includes('leveraged farm') || c === 'farm') return `Harvest the vault's rewards on ${name} once a week and restake them into the same vault.`;
   if (c.includes('bridge')) return `Send a second, smaller bridge of $${Math.round(capital / 4)} back through ${name} the following week.`;
   if (c.includes('staking') || c.includes('restak')) return `Delegate a second stake of $${Math.round(capital / 2)} to a different validator through ${name}.`;
   if (c.includes('perpetual') || c.includes('derivative')) return `Close the hedge on ${name} and open a fresh one the next week so both sides of the book are touched.`;
@@ -422,6 +439,9 @@ function secondActionFor(p: SnapshotProtocol, capital: number, chain: string): s
   if (c.includes('stable')) return `Swap $${Math.round(capital / 2)} of the stable asset for another asset on ${chain} and swap it back.`;
   if (c.includes('rwa')) return `Claim the yield the ${name} position earned and reinvest it in the same asset.`;
   if (c.includes('insurance')) return `Renew the ${name} cover once and file one test claim so the policy is active.`;
+  if (c.includes('basis')) return `Claim the funding yield the ${name} position earned once a week and restake it into the same vault.`;
+  if (c === 'chain') return `Use a second app on ${chain}: deposit $${Math.round(capital / 2)} into another protocol that runs on the chain.`;
+  if (c.includes('btc')) return `Swap $${Math.round(capital / 2)} of the BTC-pegged asset for another asset on ${chain} and swap it back.`;
   return `Use ${name} a second way on ${chain}: a swap, a vote or a deposit of $${Math.round(capital / 2)}.`;
 }
 
@@ -481,8 +501,8 @@ function riskFor(p: SnapshotProtocol, capital: number, chain: string): FarmStep 
   const c = (p.category ?? '').toLowerCase();
   const name = p.name;
   if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return { text: `Watch the borrow's health factor on ${name}: if the collateral falls, repay part of the loan or add collateral before the position is liquidated.`, cost: 'nothing to check; a liquidation would cost part of the collateral', time: '5 minutes a week' };
-  if (c.includes('dex')) return { text: `Watch for impermanent loss on ${name}: if the pool's price moves a long way, the LP shares can be worth less than holding the tokens, so check the position before adding more.`, cost: 'nothing to check; the loss is the price move itself', time: '5 minutes a week' };
-  if (c.includes('yield') || c.includes('leveraged farm')) return { text: `Vault yields and leverage change on ${name}: check the vault's strategy and leverage before adding more, and pull out if the leverage has risen past what you set.`, cost: 'nothing to check; a leveraged vault can lose more than it gains', time: '5 minutes a week' };
+  if (c.includes('dex') || c.includes('liquidity manager')) return { text: `Watch for impermanent loss on ${name}: if the pool's price moves a long way, the LP shares can be worth less than holding the tokens, so check the position before adding more.`, cost: 'nothing to check; the loss is the price move itself', time: '5 minutes a week' };
+  if (c.includes('yield') || c.includes('leveraged farm') || c === 'farm') return { text: `Vault yields and leverage change on ${name}: check the vault's strategy and leverage before adding more, and pull out if the leverage has risen past what you set.`, cost: 'nothing to check; a leveraged vault can lose more than it gains', time: '5 minutes a week' };
   if (c.includes('bridge')) return { text: `Bridged funds depend on ${name}'s contracts: use only the bridge page the protocol itself publishes, and keep the receipt for each crossing until the funds arrive on ${chain}.`, cost: 'nothing to check; a failed crossing strands the funds', time: '5 minutes a crossing' };
   if (c.includes('staking') || c.includes('restak')) return { text: `Staked assets can be slashed or locked on ${name}: check the unbonding wait and the slashing terms before staking more, so you know how long an exit takes.`, cost: 'nothing to check; the lock is the unbonding wait', time: '5 minutes' };
   if (c.includes('perpetual') || c.includes('derivative')) return { text: `Leverage cuts both ways on ${name}: keep the margin small, and close the hedge if funding turns against it rather than adding margin to hold it.`, cost: 'nothing to check; a losing hedge costs the margin', time: '5 minutes a week' };
@@ -491,6 +511,9 @@ function riskFor(p: SnapshotProtocol, capital: number, chain: string): FarmStep 
   if (c.includes('stable')) return { text: `A stable asset can depeg on ${name}: check the peg and the backing before minting more, and do not hold the stable asset through a depeg.`, cost: 'nothing to check; a depeg is the loss', time: '5 minutes a week' };
   if (c.includes('rwa')) return { text: `A yield asset depends on its issuer on ${name}: check the issuer's backing and redemption terms before minting more, and know how long a redemption takes.`, cost: 'nothing to check; the issuer is the risk', time: '5 minutes' };
   if (c.includes('insurance')) return { text: `Cover pays only on its terms on ${name}: read what the policy excludes before renewing, so you do not pay for cover that would not pay out.`, cost: 'nothing to check; an exclusion voids the claim', time: '10 minutes' };
+  if (c.includes('basis')) return { text: `Basis trades earn the funding rate on ${name}: if funding flips negative the position pays instead of earning, so check the rate before adding more and leave if it stays negative.`, cost: 'nothing to check; a negative funding rate is the loss', time: '5 minutes a week' };
+  if (c === 'chain') return { text: `A new chain's bridge and sequencer can pause on ${name}: keep only the funds you plan to farm on ${chain}, and check the withdrawal wait before bridging more.`, cost: 'nothing to check; a paused bridge strands the funds', time: '5 minutes a week' };
+  if (c.includes('btc')) return { text: `A BTC-pegged asset can depeg on ${name}: check the peg and the backing before minting more, and do not hold the asset through a depeg.`, cost: 'nothing to check; a depeg is the loss', time: '5 minutes a week' };
   return { text: `The position depends on ${name}'s contracts on ${chain}: check its audits and whether it can pause withdrawals before adding more than the $${capital} you planned.`, cost: 'nothing to check; a paused contract strands the funds', time: '10 minutes' };
 }
 
