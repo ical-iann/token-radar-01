@@ -1,4 +1,4 @@
-// Token Radar's model, version radar-2: one snapshot of the protocol universe in, one ranked
+// Token Radar's model, version radar-3: one snapshot of the protocol universe in, one ranked
 // board out.
 //
 // The board covers EVERY rankable pre-token protocol in the snapshot: the whole 40-protocol
@@ -12,13 +12,22 @@
 //
 //   categoryMultiple = the category's median market-cap / TVL among the snapshot's own
 //                      live-token protocols, shrunk toward the global median (4 pseudo-counts)
-//                      and clamped to [0.05, 1.0]. A category whose tokens trade richly
-//                      against TVL (DEXs, bridges) earns a higher multiple than one whose
-//                      tokens trade thinly (liquid staking, lending); a category with one or
-//                      two live tokens is pulled toward the global median so a single outlier
-//                      cannot set the multiple. Categories with no live-token protocol use the
-//                      global median. The multiples are computed from this snapshot at run
-//                      time, never written down per category.
+//                      and clamped to [0.05, 1.0]. Before the median is taken, each live
+//                      protocol's own market-cap / TVL ratio is capped at 1.0: a token never
+//                      counts as trading at more than the TVL it secures, so a token trading
+//                      on a sliver of TVL cannot set a whole category's multiple. Without the
+//                      cap, one protocol did: Rain, a prediction-market token with a $2.6B
+//                      market cap on $6.6M of TVL (a 400x ratio), set the Prediction Market
+//                      multiple to the 1.0 clamp and put Polymarket at $318M; and API3, the
+//                      single live Risk Curator at 2.97x, set the multiple behind ranks 1, 2
+//                      and 3. With the cap no multiple sits on the clamp, and the top three
+//                      keep their order on roughly half the value. A category whose tokens
+//                      trade richly against TVL (DEXs, bridges) earns a higher multiple than
+//                      one whose tokens trade thinly (liquid staking, lending); a category
+//                      with one or two live tokens is pulled toward the global median so a
+//                      single outlier cannot set the multiple. Categories with no live-token
+//                      protocol use the global median. The multiples are computed from this
+//                      snapshot at run time, never written down per category.
 //   base       = tvl_usd x categoryMultiple
 //   growth     = clamp(change_7d, -60, 120) per cent
 //   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
@@ -64,6 +73,7 @@ export interface ModelConstants {
   shrink_count: number;
   multiple_floor: number;
   multiple_cap: number;
+  ratio_cap: number;
   breadth_per_chain: number;
   breadth_max_chains: number;
 }
@@ -79,12 +89,13 @@ export const MODEL: ModelConstants = {
   shrink_count: 4,
   multiple_floor: 0.05,
   multiple_cap: 1.0,
+  ratio_cap: 1.0,
   breadth_per_chain: 0.02,
   breadth_max_chains: 5,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -213,18 +224,21 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
 /**
  * The category multiples, computed from the snapshot's own live-token protocols: for each
  * category, the median of market-cap / TVL over its protocols that record a token and a market
- * cap, shrunk toward the global median by `shrink_count` pseudo-counts and clamped. Categories
- * with no live-token protocol fall back to the global median.
+ * cap, with each protocol's ratio capped at `ratio_cap` first (a token never counts as trading
+ * at more than the TVL it secures, so a token on a sliver of TVL cannot set a whole category's
+ * multiple), then shrunk toward the global median by `shrink_count` pseudo-counts and clamped.
+ * Categories with no live-token protocol fall back to the global median.
  */
 export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { global: number; byCategory: Map<string, number>; table: CategoryMultiple[] } {
   const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
-  const global = live.length > 0 ? median(live.map((p) => p.mcap_usd! / p.tvl_usd)) : 0.25;
+  const capped = (p: SnapshotProtocol): number => Math.min(p.mcap_usd! / p.tvl_usd, model.ratio_cap);
+  const global = live.length > 0 ? median(live.map(capped)) : 0.25;
   const byCat = new Map<string, number[]>();
   for (const p of live) {
     const key = p.category ?? 'Other';
     const list = byCat.get(key);
-    if (list) list.push(p.mcap_usd! / p.tvl_usd);
-    else byCat.set(key, [p.mcap_usd! / p.tvl_usd]);
+    if (list) list.push(capped(p));
+    else byCat.set(key, [capped(p)]);
   }
   const byCategory = new Map<string, number>();
   const table: CategoryMultiple[] = [];
@@ -412,9 +426,10 @@ function secondActionFor(p: SnapshotProtocol, capital: number, chain: string): s
 }
 
 /**
- * A protocol's farm plan: seven steps, each an action with a cost and a time. The plan is
+ * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is
  * derived from the protocol's own record (category, chains, TVL, age), never from a hand-written
- * list of names.
+ * list of names. Step 4 names the position's own risk, by category, so the plan says what can
+ * go wrong with this kind of position, not just what to deposit.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
@@ -436,6 +451,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       cost: `about $${Math.max(2, Math.round(capital / 25))} of gas`,
       time: '10 minutes',
     },
+    riskFor(p, capital, chain),
     {
       text: `Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.`,
       cost: 'about $2 of gas a week',
@@ -457,6 +473,25 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '5 minutes',
     },
   ];
+}
+
+/** The risk of this kind of position, in the words a farmer can act on: what to watch while
+ *  the capital is in. The cost is the cost of checking, never of the loss itself. */
+function riskFor(p: SnapshotProtocol, capital: number, chain: string): FarmStep {
+  const c = (p.category ?? '').toLowerCase();
+  const name = p.name;
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return { text: `Watch the borrow's health factor on ${name}: if the collateral falls, repay part of the loan or add collateral before the position is liquidated.`, cost: 'nothing to check; a liquidation would cost part of the collateral', time: '5 minutes a week' };
+  if (c.includes('dex')) return { text: `Watch for impermanent loss on ${name}: if the pool's price moves a long way, the LP shares can be worth less than holding the tokens, so check the position before adding more.`, cost: 'nothing to check; the loss is the price move itself', time: '5 minutes a week' };
+  if (c.includes('yield') || c.includes('leveraged farm')) return { text: `Vault yields and leverage change on ${name}: check the vault's strategy and leverage before adding more, and pull out if the leverage has risen past what you set.`, cost: 'nothing to check; a leveraged vault can lose more than it gains', time: '5 minutes a week' };
+  if (c.includes('bridge')) return { text: `Bridged funds depend on ${name}'s contracts: use only the bridge page the protocol itself publishes, and keep the receipt for each crossing until the funds arrive on ${chain}.`, cost: 'nothing to check; a failed crossing strands the funds', time: '5 minutes a crossing' };
+  if (c.includes('staking') || c.includes('restak')) return { text: `Staked assets can be slashed or locked on ${name}: check the unbonding wait and the slashing terms before staking more, so you know how long an exit takes.`, cost: 'nothing to check; the lock is the unbonding wait', time: '5 minutes' };
+  if (c.includes('perpetual') || c.includes('derivative')) return { text: `Leverage cuts both ways on ${name}: keep the margin small, and close the hedge if funding turns against it rather than adding margin to hold it.`, cost: 'nothing to check; a losing hedge costs the margin', time: '5 minutes a week' };
+  if (c.includes('prediction')) return { text: `A market position on ${name} can go to zero: never stake more than the position you planned, and settle it rather than doubling down on a lost market.`, cost: 'nothing to check; the stake is the loss', time: '5 minutes' };
+  if (c.includes('curator') || c.includes('allocator')) return { text: `A curator's vault follows its strategy on ${name}: check the vault's allocation before adding more, and leave if the allocation has moved away from what you joined for.`, cost: 'nothing to check; the allocation is the risk', time: '5 minutes a week' };
+  if (c.includes('stable')) return { text: `A stable asset can depeg on ${name}: check the peg and the backing before minting more, and do not hold the stable asset through a depeg.`, cost: 'nothing to check; a depeg is the loss', time: '5 minutes a week' };
+  if (c.includes('rwa')) return { text: `A yield asset depends on its issuer on ${name}: check the issuer's backing and redemption terms before minting more, and know how long a redemption takes.`, cost: 'nothing to check; the issuer is the risk', time: '5 minutes' };
+  if (c.includes('insurance')) return { text: `Cover pays only on its terms on ${name}: read what the policy excludes before renewing, so you do not pay for cover that would not pay out.`, cost: 'nothing to check; an exclusion voids the claim', time: '10 minutes' };
+  return { text: `The position depends on ${name}'s contracts on ${chain}: check its audits and whether it can pause withdrawals before adding more than the $${capital} you planned.`, cost: 'nothing to check; a paused contract strands the funds', time: '10 minutes' };
 }
 
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */

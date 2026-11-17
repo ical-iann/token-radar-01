@@ -1,4 +1,4 @@
-// Token Radar's dashboard, model radar-2. It reads window.RADAR (written beside dashboard/
+// Token Radar's dashboard, model radar-3. It reads window.RADAR (written beside dashboard/
 // by main.ts) and renders the ranked board, filters, a per-protocol detail drawer with the
 // model's own inputs and the protocol's farm plan. No network: every byte it shows is in
 // data.js. The page recomputes each row from the snapshot figures and checks the number
@@ -119,6 +119,22 @@
     if (s.length < 20) s = s + " Hold the position and check the protocol's own page.";
     return s;
   }
+  function riskFor(p, capital, chain) {
+    var c = (p.category || '').toLowerCase();
+    var name = p.name;
+    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return { text: "Watch the borrow's health factor on " + name + ': if the collateral falls, repay part of the loan or add collateral before the position is liquidated.', cost: 'nothing to check; a liquidation would cost part of the collateral', time: '5 minutes a week' };
+    if (c.indexOf('dex') >= 0) return { text: 'Watch for impermanent loss on ' + name + ': if the pool\'s price moves a long way, the LP shares can be worth less than holding the tokens, so check the position before adding more.', cost: 'nothing to check; the loss is the price move itself', time: '5 minutes a week' };
+    if (c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return { text: "Vault yields and leverage change on " + name + ": check the vault's strategy and leverage before adding more, and pull out if the leverage has risen past what you set.", cost: 'nothing to check; a leveraged vault can lose more than it gains', time: '5 minutes a week' };
+    if (c.indexOf('bridge') >= 0) return { text: 'Bridged funds depend on ' + name + '\'s contracts: use only the bridge page the protocol itself publishes, and keep the receipt for each crossing until the funds arrive on ' + chain + '.', cost: 'nothing to check; a failed crossing strands the funds', time: '5 minutes a crossing' };
+    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return { text: 'Staked assets can be slashed or locked on ' + name + ': check the unbonding wait and the slashing terms before staking more, so you know how long an exit takes.', cost: 'nothing to check; the lock is the unbonding wait', time: '5 minutes' };
+    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return { text: 'Leverage cuts both ways on ' + name + ': keep the margin small, and close the hedge if funding turns against it rather than adding margin to hold it.', cost: 'nothing to check; a losing hedge costs the margin', time: '5 minutes a week' };
+    if (c.indexOf('prediction') >= 0) return { text: 'A market position on ' + name + ' can go to zero: never stake more than the position you planned, and settle it rather than doubling down on a lost market.', cost: 'nothing to check; the stake is the loss', time: '5 minutes' };
+    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return { text: "A curator's vault follows its strategy on " + name + ": check the vault's allocation before adding more, and leave if the allocation has moved away from what you joined for.", cost: 'nothing to check; the allocation is the risk', time: '5 minutes a week' };
+    if (c.indexOf('stable') >= 0) return { text: 'A stable asset can depeg on ' + name + ': check the peg and the backing before minting more, and do not hold the stable asset through a depeg.', cost: 'nothing to check; a depeg is the loss', time: '5 minutes a week' };
+    if (c.indexOf('rwa') >= 0) return { text: "A yield asset depends on its issuer on " + name + ": check the issuer's backing and redemption terms before minting more, and know how long a redemption takes.", cost: 'nothing to check; the issuer is the risk', time: '5 minutes' };
+    if (c.indexOf('insurance') >= 0) return { text: 'Cover pays only on its terms on ' + name + ': read what the policy excludes before renewing, so you do not pay for cover that would not pay out.', cost: 'nothing to check; an exclusion voids the claim', time: '10 minutes' };
+    return { text: 'The position depends on ' + name + '\'s contracts on ' + chain + ': check its audits and whether it can pause withdrawals before adding more than the $' + capital + ' you planned.', cost: 'nothing to check; a paused contract strands the funds', time: '10 minutes' };
+  }
   function farmSteps(p) {
     var chain = chainOf(p);
     var capital = capitalFor(p);
@@ -127,6 +143,7 @@
       { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
       { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
       { text: secondActionFor(p, capital, chain), cost: 'about $' + Math.max(2, Math.round(capital / 25)) + ' of gas', time: '10 minutes' },
+      riskFor(p, capital, chain),
       { text: 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
       { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
       { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
@@ -353,19 +370,19 @@
 
   function modelPanel() {
     var m = DATA.model;
-    var top = DATA.category_multiples.slice().sort(function (a, b) { return b.multiple - a.multiple; }).slice(0, 8);
+    var all = DATA.category_multiples.slice().sort(function (a, b) { return b.multiple - a.multiple; });
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x categoryMultiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + 0.02 x min(chains - 1, 5)) )'
       ),
-      el('p', { class: 'sub', text: 'The category multiple is the category’s median market-cap / TVL among the snapshot’s own live-token protocols, shrunk toward the global median of ' + DATA.global_multiple + ' with 4 pseudo-counts and clamped to [0.05, 1.00]. A category with one live token cannot set its own multiple; a category with none uses the global median. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
-      el('h3', { text: 'Category multiples from this snapshot' }),
+      el('p', { class: 'sub', text: 'The category multiple is the category\u2019s median market-cap / TVL among the snapshot\u2019s own live-token protocols, shrunk toward the global median of ' + DATA.global_multiple + ' with 4 pseudo-counts and clamped to [0.05, 1.00]. Each live protocol\u2019s own ratio is capped at ' + m.ratio_cap.toFixed(2) + ' first: a token never counts as trading at more than the TVL it secures, so a token trading on a sliver of TVL cannot set a whole category\u2019s multiple. Without that cap one protocol did \u2014 a prediction-market token worth $2.6B on $6.6M of TVL, a 400x ratio, set its category to the 1.00 clamp. A category with one live token cannot set its own multiple; a category with none uses the global median. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
+      el('h3', { text: 'Category multiples from this snapshot (all ' + all.length + ')' }),
       el('div', { class: 'table-wrap' },
         el('table', { class: 'mult-table' },
           el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Live tokens' }), el('th', { scope: 'col', text: 'Raw median' }), el('th', { scope: 'col', text: 'Multiple used' }))),
-          el('tbody', null, top.map(function (c) {
+          el('tbody', null, all.map(function (c) {
             return el('tr', null,
               el('td', { text: c.category }),
               el('td', { class: 'num', text: String(c.live_count) }),
